@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KG Family Foods — Carton Labels</title>
+  <style>
+    :root{--b:#111;--mut:#666;--ok:#0a7a2f;--er:#b00020;--card:#fff;--bd:#eee;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:620px;color:var(--b)}
+    h2{margin:0 0 8px}
+    .muted{color:var(--mut);font-size:13px;line-height:1.35}
+    .card{border:1px solid var(--bd);border-radius:14px;padding:14px;margin:12px 0;background:var(--card)}
+    label{display:block;margin:10px 0 6px;font-weight:800}
+    input,button{width:100%;padding:12px;border:1px solid #ddd;border-radius:10px;font-size:16px}
+    button{border:none;font-weight:900;cursor:pointer}
+    .row{display:flex;gap:10px}
+    .row>*{flex:1}
+    .ok{color:var(--ok);font-weight:900}
+    .err{color:var(--er);font-weight:900}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#f6f6f6;margin-top:8px;font-size:13px}
+    video{width:100%;border-radius:12px;margin-top:10px;display:none;border:1px solid var(--bd)}
+  </style>
+</head>
+<body>
+  <h2>Ετικέτες Κιβωτίου</h2>
+  <div class="muted">
+    Σκανάρεις <b>barcode προϊόντος</b> → βρίσκει προϊόν στο Supabase → τυπώνει <b>barcode κιβωτίου</b> (carton_barcode).
+  </div>
+
+  <div class="card">
+    <button id="scanBtn">📷 Scan Barcode (Κάμερα)</button>
+    <video id="preview" playsinline></video>
+    <div id="scanHint" class="muted" style="margin-top:8px;">
+      * Αν έχεις bluetooth/USB scanner, απλά σκανάρεις και “γράφει” μέσα στο πεδίο Barcode χωρίς κάμερα.
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Barcode Προϊόντος (scan)</label>
+    <input id="productBarcode" placeholder="Σκάναρε ή γράψε barcode προϊόντος" inputmode="numeric" autocomplete="off" />
+
+    <div class="row">
+      <div>
+        <label>LOT</label>
+        <input id="lot" placeholder="π.χ. L260220-01" autocomplete="off" />
+      </div>
+      <div>
+        <label>Λήξη (EXP)</label>
+        <input id="expiry" type="date" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Ποσότητα ετικετών</label>
+        <input id="qty" type="number" min="1" value="1" />
+      </div>
+      <div>
+        <label>&nbsp;</label>
+        <button id="findBtn">Βρες Προϊόν</button>
+      </div>
+    </div>
+
+    <div id="productInfo" class="muted"></div>
+
+    <button id="saveBtn" style="margin-top:12px;">✅ Αποθήκευση Job (pending)</button>
+    <div id="msg" class="muted" style="margin-top:10px;"></div>
+
+    <div class="muted" style="margin-top:10px;">
+      Εκτύπωση γίνεται από <b>print.html</b> στο PC που είναι συνδεδεμένος ο DYMO.
+    </div>
+  </div>
+
+  <!-- 1) Config FIRST -->
+  <script src="./config.js"></script>
+
+  <!-- 2) ZXing for camera barcode scanning -->
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+
+  <!-- 3) App -->
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+    const cfg = window.APP_CONFIG || {};
+    const supabase = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+
+    const el = (id) => document.getElementById(id);
+    const setMsg = (text, ok=true) => el("msg").innerHTML = `<span class="${ok?'ok':'err'}">${text}</span>`;
+
+    // ---------- PRODUCT LOOKUP ----------
+    let currentProduct = null;
+
+    async function fetchProductByBarcode(product_barcode) {
+      const { data, error } = await supabase
+        .from("products")
+        .select("id,name,product_barcode,carton_barcode,active")
+        .eq("product_barcode", product_barcode)
+        .eq("active", true)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    }
+
+    function renderProduct(p) {
+      if (!p) { el("productInfo").innerHTML = ""; return; }
+      el("productInfo").innerHTML = `
+        <div class="pill">✅ <b>${escapeHtml(p.name)}</b></div>
+        <div class="muted">Product barcode: <b>${escapeHtml(p.product_barcode)}</b></div>
+        <div class="muted">Carton barcode (θα τυπωθεί): <b>${escapeHtml(p.carton_barcode)}</b></div>
+      `;
+    }
+
+    el("findBtn").addEventListener("click", async () => {
+      try {
+        setMsg("");
+        const pb = el("productBarcode").value.trim();
+        if (!pb) return setMsg("Γράψε/σκάναρε barcode προϊόντος.", false);
+
+        currentProduct = await fetchProductByBarcode(pb);
+        if (!currentProduct) {
+          renderProduct(null);
+          return setMsg("❌ Δεν βρέθηκε ενεργό προϊόν με αυτό το barcode.", false);
+        }
+        renderProduct(currentProduct);
+        setMsg("✅ Βρέθηκε προϊόν. Συμπλήρωσε LOT/Λήξη και πάτα Αποθήκευση.", true);
+      } catch (e) {
+        console.error(e);
+        setMsg("Σφάλμα στην αναζήτηση προϊόντος.", false);
+      }
+    });
+
+    el("saveBtn").addEventListener("click", async () => {
+      try {
+        setMsg("");
+        const pb = el("productBarcode").value.trim();
+        const lot = el("lot").value.trim();
+        const expiry_date = el("expiry").value;
+        const qty = parseInt(el("qty").value || "1", 10);
+
+        if (!pb) return setMsg("Barcode προϊόντος υποχρεωτικό.", false);
+        if (!lot) return setMsg("LOT υποχρεωτικό.", false);
+        if (!expiry_date) return setMsg("Ημερομηνία λήξης υποχρεωτική.", false);
+        if (!Number.isFinite(qty) || qty < 1) return setMsg("Ποσότητα ≥ 1.", false);
+
+        if (!currentProduct || currentProduct.product_barcode !== pb) {
+          currentProduct = await fetchProductByBarcode(pb);
+          if (!currentProduct) return setMsg("❌ Δεν βρέθηκε ενεργό προϊόν με αυτό το barcode.", false);
+          renderProduct(currentProduct);
+        }
+
+        const payload = {
+          product_id: currentProduct.id,
+          lot,
+          expiry_date,
+          qty,
+          carton_barcode: currentProduct.carton_barcode,
+          status: "pending"
+        };
+
+        const { data, error } = await supabase
+          .from("label_jobs")
+          .insert(payload)
+          .select("id")
+          .single();
+
+        if (error) throw error;
+
+        setMsg(`✅ Job δημιουργήθηκε: <b>${data.id}</b> (pending).`, true);
+      } catch (e) {
+        console.error(e);
+        setMsg("Σφάλμα στην αποθήκευση job.", false);
+      }
+    });
+
+    // ---------- CAMERA SCANNER (ZXing) ----------
+    const scanBtn = el("scanBtn");
+    const video = el("preview");
+    let codeReader = null;
+    let scanning = false;
+
+    scanBtn.addEventListener("click", async () => {
+      if (!scanning) startScanner();
+      else stopScanner();
+    });
+
+    async function startScanner() {
+      try {
+        codeReader = new ZXing.BrowserMultiFormatReader();
+        scanning = true;
+        scanBtn.textContent = "⛔ Stop Scan";
+        video.style.display = "block";
+
+        // Prefer back camera when possible (device selection can vary)
+        const devices = await codeReader.listVideoInputDevices();
+        let selectedDeviceId = devices[0]?.deviceId;
+
+        // Try to pick "back" camera by label if available
+        const back = devices.find(d => (d.label || "").toLowerCase().includes("back"));
+        if (back?.deviceId) selectedDeviceId = back.deviceId;
+
+        codeReader.decodeFromVideoDevice(selectedDeviceId, video, (result, err) => {
+          if (result?.text) {
+            el("productBarcode").value = result.text;
+            stopScanner();
+            el("findBtn").click();
+          }
+        });
+      } catch (e) {
+        console.error(e);
+        stopScanner();
+        setMsg("Δεν μπόρεσα να ανοίξω την κάμερα. (Θέλει HTTPS + permission)", false);
+      }
+    }
+
+    function stopScanner() {
+      try { codeReader?.reset?.(); } catch {}
+      scanning = false;
+      scanBtn.textContent = "📷 Scan Barcode (Κάμερα)";
+      video.style.display = "none";
+    }
+
+    // ---------- helpers ----------
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, m => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+      }[m]));
+    }
+  </script>
+</body>
+</html>

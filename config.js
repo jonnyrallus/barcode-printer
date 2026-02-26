@@ -1,0 +1,5 @@
+window.APP_CONFIG = {
+  SUPABASE_URL: "https://qngedgrhcxtjbdsdmtgy.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFuZ2VkZ3JoY3h0amJkc2RtdGd5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE2MTI2OTcsImV4cCI6MjA4NzE4ODY5N30.XYBMCm8a6iFT4mYCH_XoGZd2cR4_G_wDTejiXolCi2E",
+  PRINTER_NAME_HINT: "LabelWriter"
+};

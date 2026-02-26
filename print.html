@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="el">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KG Family Foods — Print Station</title>
+  <style>
+    :root{--b:#111;--mut:#666;--ok:#0a7a2f;--er:#b00020;--bd:#eee;}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:980px;color:var(--b)}
+    h2{margin:0 0 8px}
+    .muted{color:var(--mut);font-size:13px;line-height:1.35}
+    .card{border:1px solid var(--bd);border-radius:14px;padding:14px;margin:12px 0}
+    .ok{color:var(--ok);font-weight:900}
+    .err{color:var(--er);font-weight:900}
+    button{padding:10px 12px;border:0;border-radius:10px;font-weight:900;cursor:pointer}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;font-size:14px}
+    code{background:#f6f6f6;padding:2px 6px;border-radius:8px}
+  </style>
+
+  <!-- DYMO Framework (βάλε το αρχείο στο repo root) -->
+  <script src="./DYMO.Label.Framework.latest.js"></script>
+</head>
+<body>
+  <h2>Print Station — DYMO LW 28×89</h2>
+  <div class="muted">
+    Άνοιξε αυτή τη σελίδα στο <b>PC που είναι συνδεδεμένος ο DYMO</b>.
+    Template: <code>./templates/production.label</code>
+  </div>
+
+  <div class="card">
+    <div>Κατάσταση: <span id="status" class="muted">init…</span></div>
+    <div id="msg" class="muted" style="margin-top:10px;"></div>
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+      <button id="testBtn">🧪 Test Print</button>
+      <button id="forcePollBtn">🔄 Poll Now</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 10px;">Recent Jobs</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Product</th>
+          <th>LOT</th>
+          <th>EXP</th>
+          <th>Carton Barcode</th>
+          <th>Qty</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <!-- Config FIRST -->
+  <script src="./config.js"></script>
+
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+
+    const cfg = window.APP_CONFIG || {};
+    const supabase = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+
+    const BRAND_TEXT = "KG Family Foods";
+    const el = (id) => document.getElementById(id);
+    const setMsg = (text, ok=true) => el("msg").innerHTML = `<span class="${ok?'ok':'err'}">${text}</span>`;
+
+    let printerName = null;
+    let labelXml = null;
+
+    function pickPrinter() {
+      const printers = window.dymo?.label?.framework?.getPrinters?.() || [];
+      if (!printers.length) return null;
+      const hint = (cfg.PRINTER_NAME_HINT || "LabelWriter").toLowerCase();
+
+      const byName = printers.find(p => (p.name || "").toLowerCase().includes(hint));
+      const byType = printers.find(p => p.printerType === "LabelWriterPrinter");
+      return (byName || byType || printers[0])?.name || null;
+    }
+
+    async function loadTemplate() {
+      const res = await fetch("./templates/production.label", { cache: "no-store" });
+      if (!res.ok) throw new Error("Δεν μπορώ να φορτώσω το template ./templates/production.label");
+      return await res.text();
+    }
+
+    function openLabel(xml) {
+      return window.dymo.label.framework.openLabelXml(xml);
+    }
+
+    async function markPrinted(id) {
+      const { error } = await supabase
+        .from("label_jobs")
+        .update({ status: "printed", printed_at: new Date().toISOString(), error_message: null })
+        .eq("id", id);
+      if (error) throw error;
+    }
+
+    async function markError(id, message) {
+      const { error } = await supabase
+        .from("label_jobs")
+        .update({ status: "error", error_message: message })
+        .eq("id", id);
+      if (error) throw error;
+    }
+
+    function fillAndPrint(label, job) {
+      // Τα object names πρέπει να υπάρχουν στο DYMO template:
+      // BRAND, PRODUCT, LOT, EXP, BARCODE
+      label.setObjectText("BRAND", BRAND_TEXT);
+      label.setObjectText("PRODUCT", job.products.name);
+      label.setObjectText("LOT", `LOT: ${job.lot}`);
+      label.setObjectText("EXP", `EXP: ${job.expiry_date}`);
+      label.setObjectText("BARCODE", job.carton_barcode);
+
+      for (let i = 0; i < job.qty; i++) {
+        label.print(printerName);
+      }
+    }
+
+    async function fetchPending(limit=10) {
+      const { data, error } = await supabase
+        .from("label_jobs")
+        .select("id,lot,expiry_date,qty,carton_barcode,status,created_at, products(name)")
+        .eq("status", "pending")
+        .order("created_at", { ascending: true })
+        .limit(limit);
+      if (error) throw error;
+      return data || [];
+    }
+
+    async function fetchRecent(limit=25) {
+      const { data, error } = await supabase
+        .from("label_jobs")
+        .select("id,lot,expiry_date,qty,carton_barcode,status,created_at, products(name)")
+        .order("created_at", { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data || [];
+    }
+
+    function renderRows(items) {
+      el("rows").innerHTML = items.map(x => `
+        <tr>
+          <td class="muted">${new Date(x.created_at).toLocaleString()}</td>
+          <td><b>${escapeHtml(x.products?.name || "-")}</b></td>
+          <td>${escapeHtml(x.lot)}</td>
+          <td>${escapeHtml(x.expiry_date)}</td>
+          <td>${escapeHtml(x.carton_barcode)}</td>
+          <td>${x.qty}</td>
+          <td>${escapeHtml(x.status)}</td>
+        </tr>
+      `).join("");
+    }
+
+    async function pollOnce() {
+      try {
+        const pending = await fetchPending(10);
+
+        el("status").textContent = pending.length
+          ? `printing ${pending.length} job(s)…`
+          : "idle (no pending jobs)";
+
+        for (const job of pending) {
+          try {
+            const label = openLabel(labelXml);
+            fillAndPrint(label, job);
+            await markPrinted(job.id);
+          } catch (e) {
+            console.error(e);
+            await markError(job.id, String(e?.message || e));
+          }
+        }
+
+        const recent = await fetchRecent(25);
+        renderRows(recent);
+
+      } catch (e) {
+        console.error(e);
+        el("status").textContent = "error";
+        setMsg(`Σφάλμα: ${String(e?.message || e)}`, false);
+      }
+    }
+
+    async function init() {
+      try {
+        if (!window.dymo?.label?.framework) {
+          el("status").textContent = "DYMO framework not loaded";
+          return setMsg("Δεν φορτώθηκε το DYMO framework. Βάλε το DYMO.Label.Framework.latest.js στο repo root και έλεγξε εγκατάσταση DYMO.", false);
+        }
+
+        printerName = pickPrinter();
+        if (!printerName) {
+          el("status").textContent = "No printer";
+          return setMsg("Δεν βρέθηκε DYMO printer. Έλεγξε drivers/σύνδεση.", false);
+        }
+
+        labelXml = await loadTemplate();
+        el("status").textContent = `Ready — Printer: ${printerName}`;
+        setMsg("OK. Αυτόματο polling ξεκίνησε.", true);
+
+        el("testBtn").addEventListener("click", () => {
+          try {
+            const label = openLabel(labelXml);
+            label.setObjectText("BRAND", BRAND_TEXT);
+            label.setObjectText("PRODUCT", "Test Product");
+            label.setObjectText("LOT", "LOT: TEST-001");
+            label.setObjectText("EXP", "EXP: 2026-12-31");
+            label.setObjectText("BARCODE", "5200000000000");
+            label.print(printerName);
+            setMsg("Test label printed ✅", true);
+          } catch (e) {
+            console.error(e);
+            setMsg("Test print απέτυχε.", false);
+          }
+        });
+
+        el("forcePollBtn").addEventListener("click", pollOnce);
+
+        await pollOnce();
+        setInterval(pollOnce, 1500);
+
+      } catch (e) {
+        console.error(e);
+        el("status").textContent = "init error";
+        setMsg("Init error: " + String(e?.message || e), false);
+      }
+    }
+
+    function escapeHtml(s){
+      return String(s).replace(/[&<>"']/g, m => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+      }[m]));
+    }
+
+    init();
+  </script>
+</body>
+</html>

@@ -18,9 +18,10 @@
     code{background:#f6f6f6;padding:2px 6px;border-radius:8px}
   </style>
 
-  <!-- DYMO Framework (βάλε το αρχείο στο repo root) -->
-  <script src="./DYMO.Label.Framework.latest.js"></script>
+  <!-- ✅ DYMO Framework from local DYMO Web Service (HTTPS to avoid mixed content) -->
+  <script src="https://localhost:41951/DYMO/DYMO.Label.Framework.latest.js"></script>
 </head>
+
 <body>
   <h2>Print Station — DYMO LW 28×89</h2>
   <div class="muted">
@@ -34,6 +35,10 @@
     <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
       <button id="testBtn">🧪 Test Print</button>
       <button id="forcePollBtn">🔄 Poll Now</button>
+      <button id="openLocalBtn">🔐 Open https://localhost:41951</button>
+    </div>
+    <div class="muted" style="margin-top:10px">
+      Αν δεν φορτώνει, πάτα <b>Open https://localhost:41951</b> και κάνε μία φορά <b>Advanced → Proceed</b>.
     </div>
   </div>
 
@@ -74,10 +79,11 @@
     function pickPrinter() {
       const printers = window.dymo?.label?.framework?.getPrinters?.() || [];
       if (!printers.length) return null;
-      const hint = (cfg.PRINTER_NAME_HINT || "LabelWriter").toLowerCase();
 
+      const hint = (cfg.PRINTER_NAME_HINT || "LabelWriter").toLowerCase();
       const byName = printers.find(p => (p.name || "").toLowerCase().includes(hint));
       const byType = printers.find(p => p.printerType === "LabelWriterPrinter");
+
       return (byName || byType || printers[0])?.name || null;
     }
 
@@ -159,7 +165,6 @@
     async function pollOnce() {
       try {
         const pending = await fetchPending(10);
-
         el("status").textContent = pending.length
           ? `printing ${pending.length} job(s)…`
           : "idle (no pending jobs)";
@@ -187,9 +192,16 @@
 
     async function init() {
       try {
+        el("openLocalBtn").addEventListener("click", () => {
+          window.open("https://localhost:41951", "_blank", "noopener,noreferrer");
+        });
+
         if (!window.dymo?.label?.framework) {
           el("status").textContent = "DYMO framework not loaded";
-          return setMsg("Δεν φορτώθηκε το DYMO framework. Βάλε το DYMO.Label.Framework.latest.js στο repo root και έλεγξε εγκατάσταση DYMO.", false);
+          return setMsg(
+            "DYMO framework δεν φορτώθηκε. Πάτα 'Open https://localhost:41951' και κάνε Advanced → Proceed μία φορά, μετά refresh.",
+            false
+          );
         }
 
         printerName = pickPrinter();

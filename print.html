@@ -1,385 +1,74 @@
 <!doctype html>
 <html lang="el">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>KG Family Foods — Print Station (DYMO API)</title>
-  <style>
-    :root{--b:#111;--mut:#666;--ok:#0a7a2f;--er:#b00020;--bd:#eee;}
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:16px;max-width:1050px;color:var(--b)}
-    h2{margin:0 0 8px}
-    .muted{color:var(--mut);font-size:13px;line-height:1.35}
-    .card{border:1px solid var(--bd);border-radius:14px;padding:14px;margin:12px 0}
-    .ok{color:var(--ok);font-weight:900}
-    .err{color:var(--er);font-weight:900}
-    button{padding:10px 12px;border:0;border-radius:10px;font-weight:900;cursor:pointer}
-    input{padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px;min-width:260px}
-    table{width:100%;border-collapse:collapse}
-    th,td{border-bottom:1px solid #eee;padding:10px;text-align:left;font-size:14px}
-    code{background:#f6f6f6;padding:2px 6px;border-radius:8px}
-    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-    .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#f6f6f6;font-size:12px}
-  </style>
+<meta charset="utf-8">
+<title>KG Family Foods — DYMO 450 Print Station</title>
+
+<!-- DYMO Label Framework (required for 450 Turbo) -->
+<script src="http://localhost:41951/DYMO/DYMO.Label.Framework.latest.js"></script>
+
+<style>
+body{font-family:Arial;margin:30px;}
+button{padding:10px 15px;font-weight:bold;}
+</style>
 </head>
 
 <body>
-  <h2>Print Station — DYMO LW 28×89 (REST API)</h2>
-  <div class="muted">
-    Άνοιξε αυτή τη σελίδα στο <b>PC που είναι συνδεδεμένος ο DYMO</b>.  
-    DYMO Service: <code>https://localhost:41951</code> • Template: <code>./templates/production.label</code>
-  </div>
 
-  <div class="card">
-    <div class="row">
-      <div>Κατάσταση: <span id="status" class="muted">init…</span></div>
-      <span id="apiPill" class="pill">API: unknown</span>
-      <span id="printerPill" class="pill">Printer: (searching…)</span>
-    </div>
+<h2>DYMO 450 Turbo Print Station</h2>
+<button onclick="testPrint()">TEST PRINT</button>
 
-    <div id="msg" class="muted" style="margin-top:10px;"></div>
+<script>
 
-    <div class="row" style="margin-top:12px;">
-      <button id="openLocalBtn">🔐 Open https://localhost:41951</button>
-      <button id="checkApiBtn">✅ Check API</button>
-      <button id="testBtn">🧪 Test Print</button>
-      <button id="pollBtn">🔄 Poll Now</button>
-      <label class="muted">Poll ms:</label>
-      <input id="pollMs" type="number" min="500" step="100" value="1500" />
-    </div>
+function testPrint(){
 
-    <div class="muted" style="margin-top:10px;">
-      Αν δεν δουλεύει το print από GitHub Pages, πρέπει να έχεις “εμπιστευτεί” μία φορά το
-      <b>https://localhost:41951</b> (Advanced → Proceed).
-    </div>
-  </div>
+  if (!window.dymo || !dymo.label || !dymo.label.framework){
+    alert("DYMO Framework not loaded");
+    return;
+  }
 
-  <div class="card">
-    <h3 style="margin:0 0 10px;">Recent Jobs</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Product</th>
-          <th>LOT</th>
-          <th>EXP</th>
-          <th>Carton Barcode</th>
-          <th>Qty</th>
-          <th>Status</th>
-          <th>Error</th>
-        </tr>
-      </thead>
-      <tbody id="rows"></tbody>
-    </table>
-  </div>
+  const printers = dymo.label.framework.getPrinters();
+  if (!printers.length){
+    alert("No DYMO printers found");
+    return;
+  }
 
-  <!-- Config FIRST -->
-  <script src="./config.js"></script>
+  const printerName = printers.find(p => 
+    p.name.toLowerCase().includes("450")
+  )?.name || printers[0].name;
 
-  <script type="module">
-    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+  console.log("Using printer:", printerName);
 
-    const cfg = window.APP_CONFIG || {};
-    const supabase = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+  const labelXml = `
+  <DieCutLabel Version="8.0" Units="twips">
+    <PaperOrientation>Landscape</PaperOrientation>
+    <Id>Address</Id>
+    <PaperName>99010 Standard Address</PaperName>
 
-    const DYMO_BASE = "https://localhost:41951";
-    const BRAND_TEXT = "KG Family Foods";
+    <ObjectInfo>
+      <TextObject>
+        <Name>TEXT</Name>
+        <StyledText>
+          <Element>
+            <String>KG Family Foods</String>
+            <Attributes>
+              <Font Family="Arial" Size="18" Bold="True"/>
+            </Attributes>
+          </Element>
+        </StyledText>
+      </TextObject>
+    </ObjectInfo>
 
-    const el = (id) => document.getElementById(id);
-    const setMsg = (text, ok=true) => el("msg").innerHTML = `<span class="${ok?'ok':'err'}">${text}</span>`;
+  </DieCutLabel>
+  `;
 
-    let templateXml = null;
-    let pollTimer = null;
+  const label = dymo.label.framework.openLabelXml(labelXml);
+  label.print(printerName);
 
-    // ✅ αυτό θα γεμίσει αυτόματα
-    let selectedPrinterName = "";
+  alert("Print sent to: " + printerName);
+}
 
-    function escapeHtml(s){
-      return String(s ?? "").replace(/[&<>"']/g, m => ({
-        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-      }[m]));
-    }
-    function escapeXml(s){
-      return String(s ?? "")
-        .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-        .replace(/"/g,"&quot;").replace(/'/g,"&apos;");
-    }
-    async function safeJson(res){
-      const text = await res.text();
-      try { return JSON.parse(text); } catch { return { raw: text, status: res.status }; }
-    }
+</script>
 
-    // ---------------- DYMO API ----------------
-    async function dymoCheckApiStatus(){
-      const res = await fetch(`${DYMO_BASE}/dcd/api/check-api-status`, { cache: "no-store" });
-      const data = await safeJson(res);
-      return { ok: res.ok, data };
-    }
-
-    async function dymoGetPrinters(){
-      const res = await fetch(`${DYMO_BASE}/dcd/api/get-printers`, { cache: "no-store" });
-      const data = await safeJson(res);
-      if (!res.ok) throw new Error("DYMO get-printers failed: " + JSON.stringify(data));
-      return data;
-    }
-
-    function normalizePrinterList(printersResponse){
-      if (Array.isArray(printersResponse)) return printersResponse;
-      if (Array.isArray(printersResponse?.printers)) return printersResponse.printers;
-      if (Array.isArray(printersResponse?.data)) return printersResponse.data;
-      return [];
-    }
-
-    function pickBestPrinterName(printersResponse){
-      const list = normalizePrinterList(printersResponse);
-      if (!list.length) return "";
-
-      const hint = (cfg.PRINTER_NAME_HINT || "LabelWriter").toLowerCase();
-
-      // Pull possible name fields
-      const names = list.map(p => ({
-        raw: p,
-        name: String(p.name || p.printerName || p.printer || "")
-      })).filter(x => x.name);
-
-      if (!names.length) return "";
-
-      // Priority 1: contains "dymo" and hint
-      let best = names.find(x => x.name.toLowerCase().includes("dymo") && x.name.toLowerCase().includes(hint));
-      // Priority 2: contains "dymo"
-      if (!best) best = names.find(x => x.name.toLowerCase().includes("dymo"));
-      // Priority 3: contains hint
-      if (!best) best = names.find(x => x.name.toLowerCase().includes(hint));
-      // Priority 4: first
-      if (!best) best = names[0];
-
-      return best.name;
-    }
-
-    async function dymoPrintLabel(labelXml, printerName){
-      const payload = {
-        labelXml,
-        printerName: printerName || ""
-      };
-
-      const res = await fetch(`${DYMO_BASE}/dcd/api/print-label`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await safeJson(res);
-      if (!res.ok) throw new Error("DYMO print-label failed: " + JSON.stringify(data));
-      return data;
-    }
-
-    // ---------------- TEMPLATE ----------------
-    async function loadTemplate(){
-      const res = await fetch("./templates/production.label", { cache: "no-store" });
-      if (!res.ok) throw new Error("Δεν μπορώ να φορτώσω το template ./templates/production.label");
-      return await res.text();
-    }
-
-    function setObjectString(xml, objectName, value){
-      const re = new RegExp(
-        `(<Name>\\s*${objectName}\\s*<\\/Name>[\\s\\S]*?<String>)([\\s\\S]*?)(<\\/String>)`,
-        "i"
-      );
-      if (!re.test(xml)) return xml; // αν δεν βρεθεί, μάλλον το αντικείμενο δεν έχει σωστό name
-      return xml.replace(re, `$1${escapeXml(value)}$3`);
-    }
-
-    function buildLabelXml(job){
-      let xml = templateXml;
-      xml = setObjectString(xml, "BRAND", BRAND_TEXT);
-      xml = setObjectString(xml, "PRODUCT", job.products?.name || "");
-      xml = setObjectString(xml, "LOT", `LOT: ${job.lot}`);
-      xml = setObjectString(xml, "EXP", `EXP: ${job.expiry_date}`);
-      xml = setObjectString(xml, "BARCODE", job.carton_barcode);
-      return xml;
-    }
-
-    // ---------------- SUPABASE ----------------
-    async function fetchPending(limit=10){
-      const { data, error } = await supabase
-        .from("label_jobs")
-        .select("id,lot,expiry_date,qty,carton_barcode,status,created_at,error_message, products(name)")
-        .eq("status", "pending")
-        .order("created_at", { ascending: true })
-        .limit(limit);
-      if (error) throw error;
-      return data || [];
-    }
-
-    async function fetchRecent(limit=25){
-      const { data, error } = await supabase
-        .from("label_jobs")
-        .select("id,lot,expiry_date,qty,carton_barcode,status,created_at,error_message, products(name)")
-        .order("created_at", { ascending: false })
-        .limit(limit);
-      if (error) throw error;
-      return data || [];
-    }
-
-    async function markPrinted(id){
-      const { error } = await supabase
-        .from("label_jobs")
-        .update({ status: "printed", printed_at: new Date().toISOString(), error_message: null })
-        .eq("id", id);
-      if (error) throw error;
-    }
-
-    async function markError(id, message){
-      const { error } = await supabase
-        .from("label_jobs")
-        .update({ status: "error", error_message: message })
-        .eq("id", id);
-      if (error) throw error;
-    }
-
-    function renderRows(items){
-      el("rows").innerHTML = items.map(x => `
-        <tr>
-          <td class="muted">${new Date(x.created_at).toLocaleString()}</td>
-          <td><b>${escapeHtml(x.products?.name || "-")}</b></td>
-          <td>${escapeHtml(x.lot)}</td>
-          <td>${escapeHtml(x.expiry_date)}</td>
-          <td>${escapeHtml(x.carton_barcode)}</td>
-          <td>${x.qty}</td>
-          <td>${escapeHtml(x.status)}</td>
-          <td class="muted">${escapeHtml(x.error_message || "")}</td>
-        </tr>
-      `).join("");
-    }
-
-    // ---------------- LOOP ----------------
-    async function pollOnce(){
-      try {
-        el("status").textContent = "polling…";
-
-        const pending = await fetchPending(10);
-
-        el("status").textContent = pending.length
-          ? `printing ${pending.length} job(s)…`
-          : "idle (no pending jobs)";
-
-        for (const job of pending) {
-          try {
-            const labelXml = buildLabelXml(job);
-
-            // ✅ τυπώνει ΠΑΝΤΑ στον DYMO που βρήκαμε
-            const pn = selectedPrinterName || "";
-            for (let i = 0; i < job.qty; i++) {
-              await dymoPrintLabel(labelXml, pn);
-            }
-
-            await markPrinted(job.id);
-          } catch (e) {
-            console.error(e);
-            await markError(job.id, String(e?.message || e));
-          }
-        }
-
-        const recent = await fetchRecent(25);
-        renderRows(recent);
-
-      } catch (e) {
-        console.error(e);
-        el("status").textContent = "error";
-        setMsg(`Σφάλμα: ${String(e?.message || e)}`, false);
-      }
-    }
-
-    function startPolling(){
-      const ms = Math.max(500, parseInt(el("pollMs").value || "1500", 10));
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(pollOnce, ms);
-    }
-
-    // ---------------- INIT ----------------
-    async function init(){
-      try {
-        el("openLocalBtn").addEventListener("click", () => {
-          window.open(`${DYMO_BASE}`, "_blank", "noopener,noreferrer");
-        });
-
-        el("checkApiBtn").addEventListener("click", async () => {
-          try {
-            const r = await dymoCheckApiStatus();
-            el("apiPill").textContent = r.ok ? "API: OK" : "API: ERROR";
-            setMsg("DYMO API status: " + JSON.stringify(r.data), r.ok);
-          } catch (e) {
-            el("apiPill").textContent = "API: ERROR";
-            setMsg("DYMO API check failed. Άνοιξε https://localhost:41951 και κάνε Advanced → Proceed.", false);
-          }
-        });
-
-        el("testBtn").addEventListener("click", async () => {
-          try {
-            const fakeJob = {
-              lot: "TEST-001",
-              expiry_date: "2026-12-31",
-              carton_barcode: "5200000000000",
-              products: { name: "Test Product" }
-            };
-            const labelXml = buildLabelXml(fakeJob);
-
-            // ✅ explicit printer
-            const pn = selectedPrinterName || "";
-            await dymoPrintLabel(labelXml, pn);
-
-            setMsg(`Test label sent ✅ (Printer: ${pn || "default"})`, true);
-          } catch (e) {
-            console.error(e);
-            setMsg("Test print failed. Πες μου τι γράφει στο Error (δεξιά στον πίνακα) ή στο Console.", false);
-          }
-        });
-
-        el("pollBtn").addEventListener("click", pollOnce);
-        el("pollMs").addEventListener("change", startPolling);
-
-        // Load template
-        templateXml = await loadTemplate();
-
-        // Check DYMO API
-        try {
-          const status = await dymoCheckApiStatus();
-          el("apiPill").textContent = status.ok ? "API: OK" : "API: ERROR";
-        } catch {
-          el("apiPill").textContent = "API: ERROR";
-          setMsg("Δεν μπορώ να μιλήσω στο DYMO API. Άνοιξε https://localhost:41951 και κάνε Advanced → Proceed.", false);
-        }
-
-        // ✅ AUTO SELECT PRINTER
-        try {
-          const printers = await dymoGetPrinters();
-          selectedPrinterName = pickBestPrinterName(printers);
-
-          if (selectedPrinterName) {
-            el("printerPill").textContent = `Printer: ${selectedPrinterName}`;
-          } else {
-            el("printerPill").textContent = "Printer: (no printers found)";
-            setMsg("Δεν βρέθηκε κανένας εκτυπωτής από το DYMO API. Έλεγξε αν ο DYMO φαίνεται στα Windows και στο DYMO Connect.", false);
-          }
-        } catch (e) {
-          console.error(e);
-          el("printerPill").textContent = "Printer: (error)";
-          setMsg("Απέτυχε η λίστα printers από DYMO. Άνοιξε το DYMO Connect και ξαναδοκίμασε.", false);
-        }
-
-        el("status").textContent = "ready";
-        setMsg("OK. Αυτόματο polling ξεκίνησε.", true);
-
-        await pollOnce();
-        startPolling();
-
-      } catch (e) {
-        console.error(e);
-        el("status").textContent = "init error";
-        setMsg("Init error: " + String(e?.message || e), false);
-      }
-    }
-
-    init();
-  </script>
 </body>
 </html>

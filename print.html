@@ -33,7 +33,7 @@
     <div class="row">
       <div>Κατάσταση: <span id="status" class="muted">init…</span></div>
       <span id="apiPill" class="pill">API: unknown</span>
-      <span id="printerPill" class="pill">Printer: (not loaded)</span>
+      <span id="printerPill" class="pill">Printer: (searching…)</span>
     </div>
 
     <div id="msg" class="muted" style="margin-top:10px;"></div>
@@ -72,20 +72,16 @@
     </table>
   </div>
 
-  <!-- Config FIRST (must exist in repo root) -->
+  <!-- Config FIRST -->
   <script src="./config.js"></script>
 
   <script type="module">
     import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
-    // ---------------- CONFIG ----------------
     const cfg = window.APP_CONFIG || {};
     const supabase = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
-    // DYMO local service base (HTTPS to avoid mixed content from GitHub Pages)
     const DYMO_BASE = "https://localhost:41951";
-
-    // Your label header
     const BRAND_TEXT = "KG Family Foods";
 
     const el = (id) => document.getElementById(id);
@@ -94,18 +90,19 @@
     let templateXml = null;
     let pollTimer = null;
 
-    // ---------------- HELPERS ----------------
+    // ✅ αυτό θα γεμίσει αυτόματα
+    let selectedPrinterName = "";
+
     function escapeHtml(s){
       return String(s ?? "").replace(/[&<>"']/g, m => ({
         "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
       }[m]));
     }
-
-    function fmtDate(isoDate){
-      // isoDate from DB is YYYY-MM-DD
-      return String(isoDate ?? "");
+    function escapeXml(s){
+      return String(s ?? "")
+        .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;").replace(/'/g,"&apos;");
     }
-
     async function safeJson(res){
       const text = await res.text();
       try { return JSON.parse(text); } catch { return { raw: text, status: res.status }; }
@@ -113,90 +110,91 @@
 
     // ---------------- DYMO API ----------------
     async function dymoCheckApiStatus(){
-      // DYMO SDK helper shows /dcd/api/check-api-status
       const res = await fetch(`${DYMO_BASE}/dcd/api/check-api-status`, { cache: "no-store" });
       const data = await safeJson(res);
       return { ok: res.ok, data };
     }
 
     async function dymoGetPrinters(){
-      // List printers
       const res = await fetch(`${DYMO_BASE}/dcd/api/get-printers`, { cache: "no-store" });
       const data = await safeJson(res);
       if (!res.ok) throw new Error("DYMO get-printers failed: " + JSON.stringify(data));
-      // data is usually array of printers; keep flexible
       return data;
     }
 
-    function pickPrinterName(printers){
-      const hint = (cfg.PRINTER_NAME_HINT || "LabelWriter").toLowerCase();
-
-      // printers might be [{name:"...", ...}] or {printers:[...]} depending on version
-      const list = Array.isArray(printers) ? printers : (printers?.printers || printers?.data || []);
-      if (!Array.isArray(list) || !list.length) return "";
-
-      const byHint = list.find(p => String(p.name || p.printerName || "").toLowerCase().includes(hint));
-      const first = byHint || list[0];
-
-      return String(first.name || first.printerName || "");
+    function normalizePrinterList(printersResponse){
+      if (Array.isArray(printersResponse)) return printersResponse;
+      if (Array.isArray(printersResponse?.printers)) return printersResponse.printers;
+      if (Array.isArray(printersResponse?.data)) return printersResponse.data;
+      return [];
     }
 
-    async function dymoPrintLabel(labelXml, printerName=""){
-      const payload = { labelXml, printerName }; // DYMO helper accepts these fields
+    function pickBestPrinterName(printersResponse){
+      const list = normalizePrinterList(printersResponse);
+      if (!list.length) return "";
+
+      const hint = (cfg.PRINTER_NAME_HINT || "LabelWriter").toLowerCase();
+
+      // Pull possible name fields
+      const names = list.map(p => ({
+        raw: p,
+        name: String(p.name || p.printerName || p.printer || "")
+      })).filter(x => x.name);
+
+      if (!names.length) return "";
+
+      // Priority 1: contains "dymo" and hint
+      let best = names.find(x => x.name.toLowerCase().includes("dymo") && x.name.toLowerCase().includes(hint));
+      // Priority 2: contains "dymo"
+      if (!best) best = names.find(x => x.name.toLowerCase().includes("dymo"));
+      // Priority 3: contains hint
+      if (!best) best = names.find(x => x.name.toLowerCase().includes(hint));
+      // Priority 4: first
+      if (!best) best = names[0];
+
+      return best.name;
+    }
+
+    async function dymoPrintLabel(labelXml, printerName){
+      const payload = {
+        labelXml,
+        printerName: printerName || ""
+      };
+
       const res = await fetch(`${DYMO_BASE}/dcd/api/print-label`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
+
       const data = await safeJson(res);
       if (!res.ok) throw new Error("DYMO print-label failed: " + JSON.stringify(data));
       return data;
     }
 
-    // ---------------- LABEL TEMPLATE ----------------
+    // ---------------- TEMPLATE ----------------
     async function loadTemplate(){
       const res = await fetch("./templates/production.label", { cache: "no-store" });
       if (!res.ok) throw new Error("Δεν μπορώ να φορτώσω το template ./templates/production.label");
       return await res.text();
     }
 
-    // Replace fields in a DYMO .label XML.
-    // REQUIREMENT: in DYMO template, objects must be named:
-    // BRAND, PRODUCT, LOT, EXP, BARCODE
-    // We replace their text values by editing the XML "String" nodes under those objects.
-    // This simple replacer works reliably if each object has a single <String>...</String>.
     function setObjectString(xml, objectName, value){
-      // Match <Name>OBJECT</Name> ... <String>...</String>
       const re = new RegExp(
         `(<Name>\\s*${objectName}\\s*<\\/Name>[\\s\\S]*?<String>)([\\s\\S]*?)(<\\/String>)`,
         "i"
       );
-      if (!re.test(xml)) {
-        // If not found, keep xml (template naming likely wrong)
-        return xml;
-      }
+      if (!re.test(xml)) return xml; // αν δεν βρεθεί, μάλλον το αντικείμενο δεν έχει σωστό name
       return xml.replace(re, `$1${escapeXml(value)}$3`);
-    }
-
-    function escapeXml(s){
-      return String(s ?? "")
-        .replace(/&/g,"&amp;")
-        .replace(/</g,"&lt;")
-        .replace(/>/g,"&gt;")
-        .replace(/"/g,"&quot;")
-        .replace(/'/g,"&apos;");
     }
 
     function buildLabelXml(job){
       let xml = templateXml;
-
       xml = setObjectString(xml, "BRAND", BRAND_TEXT);
       xml = setObjectString(xml, "PRODUCT", job.products?.name || "");
       xml = setObjectString(xml, "LOT", `LOT: ${job.lot}`);
-      xml = setObjectString(xml, "EXP", `EXP: ${fmtDate(job.expiry_date)}`);
-      // For barcode object, DYMO templates usually also use <String> for the encoded value
+      xml = setObjectString(xml, "EXP", `EXP: ${job.expiry_date}`);
       xml = setObjectString(xml, "BARCODE", job.carton_barcode);
-
       return xml;
     }
 
@@ -208,7 +206,6 @@
         .eq("status", "pending")
         .order("created_at", { ascending: true })
         .limit(limit);
-
       if (error) throw error;
       return data || [];
     }
@@ -219,7 +216,6 @@
         .select("id,lot,expiry_date,qty,carton_barcode,status,created_at,error_message, products(name)")
         .order("created_at", { ascending: false })
         .limit(limit);
-
       if (error) throw error;
       return data || [];
     }
@@ -270,9 +266,10 @@
           try {
             const labelXml = buildLabelXml(job);
 
-            // print qty times
+            // ✅ τυπώνει ΠΑΝΤΑ στον DYMO που βρήκαμε
+            const pn = selectedPrinterName || "";
             for (let i = 0; i < job.qty; i++) {
-              await dymoPrintLabel(labelXml, ""); // "" = default DYMO printer
+              await dymoPrintLabel(labelXml, pn);
             }
 
             await markPrinted(job.id);
@@ -312,13 +309,12 @@
             setMsg("DYMO API status: " + JSON.stringify(r.data), r.ok);
           } catch (e) {
             el("apiPill").textContent = "API: ERROR";
-            setMsg("DYMO API check failed. Άνοιξε https://localhost:41951 και κάνε Proceed.", false);
+            setMsg("DYMO API check failed. Άνοιξε https://localhost:41951 και κάνε Advanced → Proceed.", false);
           }
         });
 
         el("testBtn").addEventListener("click", async () => {
           try {
-            // Build a test label from template
             const fakeJob = {
               lot: "TEST-001",
               expiry_date: "2026-12-31",
@@ -326,11 +322,15 @@
               products: { name: "Test Product" }
             };
             const labelXml = buildLabelXml(fakeJob);
-            await dymoPrintLabel(labelXml, "");
-            setMsg("Test label printed ✅", true);
+
+            // ✅ explicit printer
+            const pn = selectedPrinterName || "";
+            await dymoPrintLabel(labelXml, pn);
+
+            setMsg(`Test label sent ✅ (Printer: ${pn || "default"})`, true);
           } catch (e) {
             console.error(e);
-            setMsg("Test print failed. Άνοιξε https://localhost:41951 και κάνε Proceed. Επίσης δες Console (F12).", false);
+            setMsg("Test print failed. Πες μου τι γράφει στο Error (δεξιά στον πίνακα) ή στο Console.", false);
           }
         });
 
@@ -340,7 +340,7 @@
         // Load template
         templateXml = await loadTemplate();
 
-        // Check DYMO API + printers
+        // Check DYMO API
         try {
           const status = await dymoCheckApiStatus();
           el("apiPill").textContent = status.ok ? "API: OK" : "API: ERROR";
@@ -349,12 +349,21 @@
           setMsg("Δεν μπορώ να μιλήσω στο DYMO API. Άνοιξε https://localhost:41951 και κάνε Advanced → Proceed.", false);
         }
 
+        // ✅ AUTO SELECT PRINTER
         try {
           const printers = await dymoGetPrinters();
-          const pn = pickPrinterName(printers);
-          el("printerPill").textContent = pn ? `Printer: ${pn}` : "Printer: (default)";
-        } catch {
-          el("printerPill").textContent = "Printer: (unknown)";
+          selectedPrinterName = pickBestPrinterName(printers);
+
+          if (selectedPrinterName) {
+            el("printerPill").textContent = `Printer: ${selectedPrinterName}`;
+          } else {
+            el("printerPill").textContent = "Printer: (no printers found)";
+            setMsg("Δεν βρέθηκε κανένας εκτυπωτής από το DYMO API. Έλεγξε αν ο DYMO φαίνεται στα Windows και στο DYMO Connect.", false);
+          }
+        } catch (e) {
+          console.error(e);
+          el("printerPill").textContent = "Printer: (error)";
+          setMsg("Απέτυχε η λίστα printers από DYMO. Άνοιξε το DYMO Connect και ξαναδοκίμασε.", false);
         }
 
         el("status").textContent = "ready";
